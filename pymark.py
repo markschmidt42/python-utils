@@ -2,7 +2,6 @@ from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
 from google.colab import auth
 from oauth2client.client import GoogleCredentials
-import pandas as pd
 
 # Authenticate and create the PyDrive client.
 def auth_google_drive():
@@ -13,6 +12,8 @@ def auth_google_drive():
   return drive
 
 def get_data_from_google_drive(file_id, save_as):
+  import pandas as pd
+
   drive = auth_google_drive()
   
   downloaded = drive.CreateFile({'id':file_id}) 
