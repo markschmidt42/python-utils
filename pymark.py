@@ -3,6 +3,7 @@ from pydrive.drive import GoogleDrive
 from google.colab import auth
 from oauth2client.client import GoogleCredentials
 from sklearn import preprocessing
+###################################################################################################
 
 # Authenticate and create the PyDrive client.
 def auth_google_drive():
@@ -11,6 +12,7 @@ def auth_google_drive():
   gauth.credentials = GoogleCredentials.get_application_default()
   drive = GoogleDrive(gauth)
   return drive
+#end def ------------------------------------------------------------------------------------------
 
 def get_data_from_google_drive(file_id, save_as):
   import pandas as pd
@@ -22,6 +24,7 @@ def get_data_from_google_drive(file_id, save_as):
   data_csv = pd.read_csv(save_as)
 
   return data_csv
+#end def ------------------------------------------------------------------------------------------
 
 # With my standard, I prefix all columns that are garbage with the word "Ignore"
 # I also prefix output columns with the word "Output"
@@ -35,6 +38,7 @@ def get_x_and_y(df, y_column_name):
   df_x = df[df.columns.drop(ignore_cols)]
 
   return df_x, df_y
+#end def ------------------------------------------------------------------------------------------
 
 # With my standard, I prefix all categories with the word "Category"
 def encode_category_features(df):
@@ -46,6 +50,7 @@ def encode_category_features(df):
         le = le.fit(df[feature])
         df[feature] = le.transform(df[feature])
     return df
+#end def ------------------------------------------------------------------------------------------
 
 # Build the model def for ludwig based on column names
 def ludwig_build_model_definition(df, output_col=None, output_type=None):
@@ -81,3 +86,4 @@ def ludwig_build_model_definition(df, output_col=None, output_type=None):
       "type": output_type,
     }]
   }
+#end def ------------------------------------------------------------------------------------------
