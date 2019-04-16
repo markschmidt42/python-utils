@@ -68,7 +68,7 @@ def ludwig_build_model_definition(df, output_col=None, output_type=None):
     if not col.startswith('Output'): # skip if it does
       if col.startswith('Category'):
         input_type = 'category'
-      else 
+      else:
         input_type = 'numerical'
       
       inputs.append({ 'name': col, 'type': input_type })
