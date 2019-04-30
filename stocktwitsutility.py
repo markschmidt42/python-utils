@@ -135,3 +135,5 @@ def get_stock_stream(symbol, from_date, DEBUG=False):
       token = (token + 1) % (len(access_token))
 
   file.close()
+
+  return FILE_NAME
