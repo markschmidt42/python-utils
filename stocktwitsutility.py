@@ -54,7 +54,7 @@ def get_stock_stream(symbol, from_date, DEBUG=False):
   while continue_procesing:
       # response = req_proxy.generate_proxied_request(stocktwit_url)
       try:
-          print(stocktwit_url)
+          if DEBUG: print(stocktwit_url)
           response = requests.get(stocktwit_url)
       except Exception:
           response = None
@@ -92,7 +92,7 @@ def get_stock_stream(symbol, from_date, DEBUG=False):
               #if DEBUG: print(message)
 
               if first:
-                print(message['created_at'])
+                if DEBUG: print(message['created_at'])
                 first = False
                 
               obj = {}
