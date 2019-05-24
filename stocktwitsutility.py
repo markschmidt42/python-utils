@@ -4,14 +4,33 @@
     CHANGED WORKAROUND METHOD TO USING MULTIPLE ACCESS KEYS
 """
 import csv
+import sys
 import json
 import os
 import time
 import requests
 import pendulum
 
-def get_stock_stream(symbol, from_date, DEBUG=False):
-  
+def get_record(filepath, which='last', column_index=0):
+    record = None
+    with open(filepath, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader) #skip header
+        try:
+          if which == 'first':
+              record = min(reader, key=lambda column: int(column[column_index]))
+          elif which == 'last':
+              record = max(reader, key=lambda column: int(column[column_index]))
+        except:
+          pass
+    return record
+
+def get_stock_stream(symbol, from_date, verbosity=1):
+  LOG_INFO = 1
+  LOG_DEBUG = 10
+  WALK_MODE = 'forward'
+  IDX_MSG_ID   = 0
+  IDX_DATETIME = 3
   FIELDS = ['message_id', 'symbol', 'message', 'datetime', 'user', 'user_followers', 'sentiment', 'like_count', 'reply_count', 'symbol_count', 'watchlist_count']
   SYMBOL = symbol
   FILE_NAME = 'stocktwits_' + SYMBOL + '.csv'
@@ -20,43 +39,127 @@ def get_stock_stream(symbol, from_date, DEBUG=False):
                   'access_token=44ae93a5279092f7804a0ee04753252cbf2ddfee&',
                   'access_token=990183ef04060336a46a80aa287f774a9d604f9c&']
   
-  
+
   from_date = pendulum.parse(from_date)
   from_date = from_date.subtract(days=1)
-  if DEBUG: print("Getting tweets for", symbol, ". from: ", from_date)
+  if verbosity >= LOG_INFO: print("Getting tweets for", symbol, ". from: ", from_date)
   
   file = open(FILE_NAME, 'a', newline='', encoding='utf-8')
+  csvfile = csv.DictWriter(file, FIELDS)
+
+  def create_obj(message):
+    obj = {}
+    obj['message_id'] = message['id']
+    obj['symbol'] = SYMBOL
+    obj['message'] = message['body']
+    obj['datetime'] = message['created_at']
+    obj['user'] = message['user']['id']
+    obj['user_followers'] = message['user']['followers']
+    obj['symbol_count'] = len(message['symbols'])
+
+    if 'conversation' in message:
+      obj['reply_count'] = message['conversation']['replies']
+
+    if 'likes' in message:
+      obj['like_count'] = message['likes']['total']
+
+    if 'entities' in message:
+      if 'sentiment' in message['entities']:
+        if message['entities']['sentiment'] and 'basic' in message['entities']['sentiment']:
+          obj['sentiment'] = message['entities']['sentiment']['basic']
+
+    for sym in message['symbols']:
+      if sym['symbol'] == SYMBOL:
+        obj['watchlist_count'] = sym['watchlist_count']
+        break
+
+    return obj
+  # def create_obj ############################################
+
+  def process_msg(message):
+    obj = create_obj(message)
+
+    csvfile.writerow(obj)
+    file.flush()
+  #############################################################
+
+  def add_direction(first_id, last_id):
+    if verbosity >= LOG_DEBUG: print('FIRST TO LAST: ', 'first_id', first_id, '               last_id', last_id)
+    if WALK_MODE == 'backward':
+      if first_id:
+        return "max=" + str(int(first_id)-1)
+      else:
+        return ''
+    else:
+      if last_id:
+        return "since=" + str(int(last_id)+1)
+      else:
+        return ''
+  #############################################################
+
   # DETERMINE WHERE TO START IF RESUMING SCRIPT
+  last_message_id = None
+  first_message_id = None
+  WALK_MODE = 'backward'
   if os.stat(FILE_NAME).st_size == 0:
-      # OPEN FILE IN APPEND MODE AND WRITE HEADERS TO FILE
-      last_message_id = None
-      csvfile = csv.DictWriter(file, FIELDS)
-      csvfile.writeheader()
+    # OPEN FILE IN APPEND MODE AND WRITE HEADERS TO FILE
+    csvfile.writeheader()
   else:
-      # FIRST EXTRACT LAST MESSAGE ID THEN OPEN FILE IN APPEND MODE WITHOUT WRITING HEADERS
-      file = open(FILE_NAME, 'r', newline='', encoding='utf-8')
-      csvfile = csv.DictReader((line.replace('\0', '') for line in file))
-      data = list(csvfile)
-      data = data[-1]
-      last_message_id = data['message_id']
-      file.close()
-      file = open(FILE_NAME, 'a', newline='', encoding='utf-8')
-      csvfile = csv.DictWriter(file, FIELDS)
+    # FIRST EXTRACT LAST MESSAGE ID THEN OPEN FILE IN APPEND MODE WITHOUT WRITING HEADERS
+    first_message = get_record(FILE_NAME, 'first')
+    last_message  = get_record(FILE_NAME, 'last')
+    if first_message:
+      first_message_id = first_message[IDX_MSG_ID]
+      last_message_id  = last_message[IDX_MSG_ID]
+      if verbosity >= LOG_DEBUG: print('first_message_id', first_message_id)
+      if verbosity >= LOG_DEBUG: print(first_message)
+      if verbosity >= LOG_DEBUG: print('last_message_id', last_message_id)
+      if verbosity >= LOG_DEBUG: print(last_message)
+      if verbosity >= LOG_DEBUG: print('FIRST TO LAST: ', first_message_id, last_message_id)
+      earliest_datetime = pendulum.parse(first_message[IDX_DATETIME])
+      # if we have all the old data... let's walk forward only
+      if (from_date.diff(earliest_datetime, False).in_days() <= 0):
+        WALK_MODE = 'forward'
+      if verbosity >= LOG_DEBUG: print(first_message[IDX_DATETIME], earliest_datetime, from_date, from_date.diff(earliest_datetime, False).in_days())
+  
+  #sys.exit()
+
+  if verbosity >= LOG_DEBUG: print(f'last_message_id: {last_message_id}')
 
   # req_proxy = RequestProxy()
 
-  stocktwit_url = "https://api.stocktwits.com/api/2/streams/symbol/" + SYMBOL + ".json?" + access_token[token]
-  if last_message_id is not None:
-      stocktwit_url += "max=" + str(last_message_id)
+  # stocktwit_url = "https://api.stocktwits.com/api/2/streams/symbol/" + SYMBOL + ".json?" + access_token[token]
+  # if last_message_id is not None:
+  #   stocktwit_url += add_direction(first_message_id, last_message_id)
+
+  def add_token(token):
+    return '?'+ access_token[token]
+
+  def get_wait_time():
+    # https://api.stocktwits.com/developers/docs/rate_limiting
+    LIMIT_HITS_PER_HOUR = 200
+    hits_allowed_per_hour = (60 * 60) / (LIMIT_HITS_PER_HOUR * len(access_token)) # if we have 4 tokens, we can x 4 it
+    if verbosity >= LOG_DEBUG: print('hits_allowed_per_hour', hits_allowed_per_hour)
+    return int(hits_allowed_per_hour) + 1
 
   api_hits = 0
   continue_procesing = True
   while continue_procesing:
+      # build the url
+      stocktwit_url = "https://api.stocktwits.com/api/2/streams/symbol/" + SYMBOL + ".json"
+      stocktwit_url += add_token(token)
+      stocktwit_url += add_direction(first_message_id, last_message_id)
+      token = (token + 1) % (len(access_token)) # next
+
       # response = req_proxy.generate_proxied_request(stocktwit_url)
       try:
-          if DEBUG: print(stocktwit_url)
+          if verbosity >= LOG_DEBUG: print(f'WALK_MODE:     {WALK_MODE}')
+          if verbosity >= LOG_DEBUG: print(f'stocktwit_url: {stocktwit_url}')
+          if verbosity >= LOG_INFO:  print(f'{WALK_MODE}, {stocktwit_url}')
+          time.sleep(get_wait_time())
           response = requests.get(stocktwit_url)
-      except Exception:
+      except Exception as ex:
+          if verbosity >= LOG_DEBUG: print(f'EXCEPTION: {ex}')
           response = None
 
       if response is not None:
@@ -67,72 +170,52 @@ def get_stock_stream(symbol, from_date, DEBUG=False):
                   int(response.headers['X-RateLimit-Reset']) - int(time.time())))
 
           if not response.status_code == 200:
-              stocktwit_url = "https://api.stocktwits.com/api/2/streams/symbol/" + SYMBOL + ".json?" + access_token[
-                  token] + "max=" + str(
-                  last_message_id)
-              token = (token + 1) % (len(access_token))
-              continue
+            print('RESPONSE.STATUS_CODE', response.status_code)
+            continue_procesing = False
+            continue
 
           api_hits += 1
           response = json.loads(response.text)
-          last_message_id = response['cursor']['max']
+          if verbosity >= LOG_DEBUG: print(response['cursor'])
+          first_message_id = response['cursor']['max']   # smallest, oldest
+          last_message_id  = response['cursor']['since'] # largest, newest
+          # print('PROCESS RESPONSE')
+          # stocktwit_url += add_direction(first_message_id, last_message_id)
 
           # WRITE DATA TO CSV FILE
           first = True
           for message in response['messages']:
               dt = pendulum.parse(message['created_at'])
-              #print(dt, from_date, dt.diff(from_date, False).in_days())
+              if verbosity >= LOG_DEBUG: print(message['id'], dt, from_date, dt.diff(from_date, False).in_days())
               
               # if we hit our date range, stop
               if dt.diff(from_date, False).in_days() > 0:
+                if verbosity >= LOG_DEBUG: print('WE HIT OUR DATE RANGE')
                 continue_procesing = False
                 break
                 
               # PREPARE OBJECT TO WRITE IN CSV FILE
-              #if DEBUG: print(message)
+              #if verbosity >= LOG_DEBUG: print(message)
 
               if first:
-                if DEBUG: print(message['created_at'])
+                if verbosity >= LOG_INFO: print(message['id'], message['created_at'])
                 first = False
-                
-              obj = {}
-              obj['message_id'] = message['id']
-              obj['symbol'] = SYMBOL
-              obj['message'] = message['body']
-              obj['datetime'] = message['created_at']
-              obj['user'] = message['user']['id']
-              obj['user_followers'] = message['user']['followers']
-              obj['symbol_count'] = len(message['symbols'])
 
-              if 'conversation' in message:
-                obj['reply_count'] = message['conversation']['replies']
-              
-              if 'likes' in message:
-                obj['like_count'] = message['likes']['total']
-              
-              if 'entities' in message:
-                if 'sentiment' in message['entities']:
-                  if message['entities']['sentiment'] and 'basic' in message['entities']['sentiment']:
-                    obj['sentiment'] = message['entities']['sentiment']['basic']
+              process_msg(message)                
 
-              for sym in message['symbols']:
-                if sym['symbol'] == SYMBOL:
-                  obj['watchlist_count'] = sym['watchlist_count']
-                  break
-
-              csvfile.writerow(obj)
-              file.flush()
-
-          if DEBUG: print("API HITS TILL NOW = {}".format(api_hits))
+          if verbosity >= LOG_DEBUG: print("API HITS TILL NOW = {}".format(api_hits))
 
           # NO MORE MESSAGES
           if not response['messages']:
-              break
+            if verbosity >= LOG_DEBUG: print('NO MORE MESSAGES')
+            continue_procesing = False
+            break
 
-      # ADD MAX ARGUMENT TO GET OLDER MESSAGES
-      stocktwit_url = "https://api.stocktwits.com/api/2/streams/symbol/" + SYMBOL + ".json?" + access_token[
-          token] + "max=" + str(last_message_id)
-      token = (token + 1) % (len(access_token))
+      # # ADD MAX ARGUMENT TO GET OLDER MESSAGES
+      # print('ADD MAX ARGUMENT TO GET OLDER MESSAGES')
+      # stocktwit_url = "https://api.stocktwits.com/api/2/streams/symbol/" + SYMBOL + ".json?" + access_token[token]
+      # stocktwit_url += add_direction(first_message_id, last_message_id)
+      # token = (token + 1) % (len(access_token))
 
   file.close()
 
