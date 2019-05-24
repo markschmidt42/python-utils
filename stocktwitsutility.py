@@ -8,6 +8,7 @@ import sys
 import json
 import os
 import time
+import math
 import requests
 import pendulum
 
@@ -25,6 +26,7 @@ def get_record(filepath, which='last', column_index=0):
           pass
     return record
 
+
 def get_stock_stream(symbol, from_date, verbosity=1):
   LOG_INFO = 1
   LOG_DEBUG = 10
@@ -35,17 +37,40 @@ def get_stock_stream(symbol, from_date, verbosity=1):
   SYMBOL = symbol
   FILE_NAME = 'stocktwits_' + SYMBOL + '.csv'
   token = 0
-  access_token = ['', 'access_token=32a3552d31b92be5d2a3d282ca3a864f96e95818&',
-                  'access_token=44ae93a5279092f7804a0ee04753252cbf2ddfee&',
-                  'access_token=990183ef04060336a46a80aa287f774a9d604f9c&']
-  
+  access_token = [
+    '', 
+    'access_token=759b619b9d2def2226e80a896f17599663e503bb&', # mark's test app: https://api.stocktwits.com/developers/apps/4805
+    'access_token=f99e9de127e08b762a181c774bfae836b0292d84&', # mark's test app: https://api.stocktwits.com/developers/apps/4806
+    'access_token=551b250b1b117557bc267c8affe51f893d8fd461&', # mark's test app: https://api.stocktwits.com/developers/apps/4807
+    'access_token=32a3552d31b92be5d2a3d282ca3a864f96e95818&',
+    'access_token=44ae93a5279092f7804a0ee04753252cbf2ddfee&',
+    'access_token=990183ef04060336a46a80aa287f774a9d604f9c&',
+  ]
 
+  # duplicate the accesstokens (except the public one), # 200 public, 400 private. You can use the private x2
+  access_token.extend(access_token[1:]) # duplicate, skip first
+  
   from_date = pendulum.parse(from_date)
   from_date = from_date.subtract(days=1)
   if verbosity >= LOG_INFO: print("Getting tweets for", symbol, ". from: ", from_date)
   
   file = open(FILE_NAME, 'a', newline='', encoding='utf-8')
   csvfile = csv.DictWriter(file, FIELDS)
+
+  def get_first_last_info_from_csv():
+    first_message_id = None
+    last_message_id = None
+    first_message = get_record(FILE_NAME, 'first')
+    last_message  = get_record(FILE_NAME, 'last')
+    if first_message:
+      first_message_id = first_message[IDX_MSG_ID]
+      last_message_id  = last_message[IDX_MSG_ID]
+      if verbosity >= LOG_DEBUG: print('first_message_id', first_message_id)
+      if verbosity >= LOG_DEBUG: print(first_message)
+      if verbosity >= LOG_DEBUG: print('last_message_id', last_message_id)
+      if verbosity >= LOG_DEBUG: print(last_message)
+      if verbosity >= LOG_DEBUG: print('FIRST TO LAST: ', first_message_id, last_message_id)
+    return first_message_id, last_message_id, first_message, last_message
 
   def create_obj(message):
     obj = {}
@@ -106,16 +131,8 @@ def get_stock_stream(symbol, from_date, verbosity=1):
     csvfile.writeheader()
   else:
     # FIRST EXTRACT LAST MESSAGE ID THEN OPEN FILE IN APPEND MODE WITHOUT WRITING HEADERS
-    first_message = get_record(FILE_NAME, 'first')
-    last_message  = get_record(FILE_NAME, 'last')
+    first_message_id, last_message_id, first_message, last_message = get_first_last_info_from_csv()
     if first_message:
-      first_message_id = first_message[IDX_MSG_ID]
-      last_message_id  = last_message[IDX_MSG_ID]
-      if verbosity >= LOG_DEBUG: print('first_message_id', first_message_id)
-      if verbosity >= LOG_DEBUG: print(first_message)
-      if verbosity >= LOG_DEBUG: print('last_message_id', last_message_id)
-      if verbosity >= LOG_DEBUG: print(last_message)
-      if verbosity >= LOG_DEBUG: print('FIRST TO LAST: ', first_message_id, last_message_id)
       earliest_datetime = pendulum.parse(first_message[IDX_DATETIME])
       # if we have all the old data... let's walk forward only
       if (from_date.diff(earliest_datetime, False).in_days() <= 0):
@@ -137,10 +154,11 @@ def get_stock_stream(symbol, from_date, verbosity=1):
 
   def get_wait_time():
     # https://api.stocktwits.com/developers/docs/rate_limiting
-    LIMIT_HITS_PER_HOUR = 200
-    hits_allowed_per_hour = (60 * 60) / (LIMIT_HITS_PER_HOUR * len(access_token)) # if we have 4 tokens, we can x 4 it
+    LIMIT_HITS_PER_HOUR = 200 # 200 public, 400 private. Treat them all like public. I duplicated the privates, so they will get hit double
+    hits_allowed_per_hour = (60.0 * 60.0) / (LIMIT_HITS_PER_HOUR * len(access_token)) # if we have 4 tokens, we can x 4 it
     if verbosity >= LOG_DEBUG: print('hits_allowed_per_hour', hits_allowed_per_hour)
-    return int(hits_allowed_per_hour) + 1
+    return hits_allowed_per_hour
+    #return int(math.ceil(hits_allowed_per_hour))
 
   api_hits = 0
   continue_procesing = True
@@ -155,7 +173,7 @@ def get_stock_stream(symbol, from_date, verbosity=1):
       try:
           if verbosity >= LOG_DEBUG: print(f'WALK_MODE:     {WALK_MODE}')
           if verbosity >= LOG_DEBUG: print(f'stocktwit_url: {stocktwit_url}')
-          if verbosity >= LOG_INFO:  print(f'{WALK_MODE}, {stocktwit_url}')
+          if verbosity >= LOG_INFO:  print(f'{WALK_MODE},\t{first_message_id}\t{last_message_id}\t{stocktwit_url}')
           time.sleep(get_wait_time())
           response = requests.get(stocktwit_url)
       except Exception as ex:
@@ -208,8 +226,14 @@ def get_stock_stream(symbol, from_date, verbosity=1):
           # NO MORE MESSAGES
           if not response['messages']:
             if verbosity >= LOG_DEBUG: print('NO MORE MESSAGES')
-            continue_procesing = False
-            break
+            
+            if WALK_MODE == 'backward':
+              # once we are done going all the way back.... go forward
+              WALK_MODE = 'forward'
+              first_message_id, last_message_id, _, _ = get_first_last_info_from_csv()
+            else:
+              continue_procesing = False
+              break
 
       # # ADD MAX ARGUMENT TO GET OLDER MESSAGES
       # print('ADD MAX ARGUMENT TO GET OLDER MESSAGES')
